@@ -220,7 +220,8 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
     window.addEventListener("mouseup", stop);
   };
 
-  const startTouchDrag = (e: ReactTouchEvent, index: number) => {
+  const startTouchDrag = (_e: ReactTouchEvent, index: number) => {
+    // Parameter _e tidak digunakan tapi diperlukan untuk event handler signature
     setDraggingIndex(index);
 
     const move = (event: TouchEvent) => {
