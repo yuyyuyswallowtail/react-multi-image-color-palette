@@ -25,10 +25,14 @@ export function ShuffleButton({ item }: Props) {
   const dispatch = useDispatch();
 
   const handleShuffle = () => {
+    const shuffledColors = shuffleArray(item.colors);
+
+    // Set pickers ke empty array untuk trigger re-scan di ImageCanvas
     dispatch(
       updateColors({
         ...item,
-        colors: shuffleArray(item.colors),
+        colors: shuffledColors,
+        pickers: [], // Kosongkan pickers agar ImageCanvas re-scan posisi baru
       }),
     );
   };

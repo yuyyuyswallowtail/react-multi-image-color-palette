@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type {
+  MouseEvent as ReactMouseEvent,
+  TouchEvent as ReactTouchEvent,
+} from "react";
 import { useDispatch } from "react-redux";
 import { updateColors } from "@/features/palette/paletteSlice";
 import { extractColors } from "@/utils/color";
@@ -22,6 +25,7 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [localPickers, setLocalPickers] = useState<Picker[]>(pickers);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
 
   useEffect(() => {
     setLocalPickers(pickers);
@@ -35,7 +39,6 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
     height: number,
     usedPositions: Array<{ x: number; y: number }>,
   ): Picker => {
-    // Convert hex to RGB
     const hex = targetColor.replace("#", "");
     const targetR = parseInt(hex.substring(0, 2), 16);
     const targetG = parseInt(hex.substring(2, 4), 16);
@@ -43,14 +46,12 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
 
     let bestMatch = { x: 0.5, y: 0.5 };
     let bestDistance = Infinity;
-    const minPickerDistance = 40; // Jarak minimum antar picker (dalam pixel)
+    const minPickerDistance = 40;
 
-    // Sample dengan grid yang lebih rapat untuk akurasi lebih baik
     const step = Math.max(2, Math.floor(Math.min(width, height) / 80));
 
     for (let y = 0; y < height; y += step) {
       for (let x = 0; x < width; x += step) {
-        // Check jarak dengan picker yang sudah ada
         let tooClose = false;
         for (const used of usedPositions) {
           const dist = Math.sqrt(
@@ -66,7 +67,6 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
 
         const pixel = ctx.getImageData(x, y, 1, 1).data;
 
-        // Calculate color distance (Euclidean distance in RGB space)
         const colorDistance = Math.sqrt(
           Math.pow(pixel[0] - targetR, 2) +
             Math.pow(pixel[1] - targetG, 2) +
@@ -86,6 +86,37 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
     };
   };
 
+  const scanPickerPositions = (
+    ctx: CanvasRenderingContext2D,
+    colorList: string[],
+    width: number,
+    height: number,
+  ) => {
+    const newPickers: Picker[] = [];
+    const usedPositions: Array<{ x: number; y: number }> = [];
+
+    for (const color of colorList) {
+      const picker = findBestMatchPosition(
+        ctx,
+        color,
+        width,
+        height,
+        usedPositions,
+      );
+
+      newPickers.push(picker);
+
+      usedPositions.push({
+        x: Math.round(picker.x * (width - 1)),
+        y: Math.round(picker.y * (height - 1)),
+      });
+    }
+
+    dispatch(
+      updateColors({ id, image, colors: colorList, pickers: newPickers }),
+    );
+  };
+
   useEffect(() => {
     const img = imgRef.current;
     if (!img) return;
@@ -100,40 +131,21 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
       ctx.drawImage(img, 0, 0);
       canvasRef.current = canvas;
 
-      if (colors.length === 0) {
+      // Jika colors ada tapi pickers kosong (setelah shuffle), re-scan posisi
+      if (colors.length > 0 && pickers.length === 0) {
+        scanPickerPositions(ctx, colors, canvas.width, canvas.height);
+      }
+      // Jika pertama kali upload (colors kosong), extract colors dulu
+      else if (colors.length === 0) {
         const palette = await extractColors(img);
-        const defaultPickers: Picker[] = [];
-        const usedPositions: Array<{ x: number; y: number }> = [];
-
-        // Untuk setiap warna, cari posisi terbaik
-        for (const color of palette) {
-          const picker = findBestMatchPosition(
-            ctx,
-            color,
-            canvas.width,
-            canvas.height,
-            usedPositions,
-          );
-
-          defaultPickers.push(picker);
-
-          // Simpan posisi dalam pixel untuk pengecekan jarak berikutnya
-          usedPositions.push({
-            x: Math.round(picker.x * (canvas.width - 1)),
-            y: Math.round(picker.y * (canvas.height - 1)),
-          });
-        }
-
-        dispatch(
-          updateColors({ id, image, colors: palette, pickers: defaultPickers }),
-        );
+        scanPickerPositions(ctx, palette, canvas.width, canvas.height);
       }
     };
 
     if (img.complete) handleLoad();
     else img.addEventListener("load", handleLoad);
     return () => img.removeEventListener("load", handleLoad);
-  }, [id, image, colors.length, dispatch]);
+  }, [id, image, colors.length, pickers.length, dispatch]);
 
   const getColorFromRatio = (xRatio: number, yRatio: number) => {
     const canvas = canvasRef.current;
@@ -156,45 +168,79 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
     );
   };
 
-  const startDrag = (e: ReactMouseEvent, index: number) => {
-    e.preventDefault();
+  const updatePickerPosition = (
+    clientX: number,
+    clientY: number,
+    index: number,
+  ) => {
     const img = imgRef.current;
     if (!img) return;
 
+    const rect = img.getBoundingClientRect();
+
+    let xRatio = (clientX - rect.left) / rect.width;
+    let yRatio = (clientY - rect.top) / rect.height;
+
+    xRatio = Math.max(0, Math.min(xRatio, 1));
+    yRatio = Math.max(0, Math.min(yRatio, 1));
+
+    const updatedPickers = [...localPickers];
+    updatedPickers[index] = { x: xRatio, y: yRatio };
+
+    const newColor = getColorFromRatio(xRatio, yRatio);
+    const updatedColors = [...colors];
+    updatedColors[index] = newColor;
+
+    setLocalPickers(updatedPickers);
+    dispatch(
+      updateColors({
+        id,
+        image,
+        colors: updatedColors,
+        pickers: updatedPickers,
+      }),
+    );
+  };
+
+  const startDrag = (e: ReactMouseEvent, index: number) => {
+    e.preventDefault();
+    setDraggingIndex(index);
+
     const move = (event: MouseEvent) => {
-      const rect = img.getBoundingClientRect();
-
-      let xRatio = (event.clientX - rect.left) / rect.width;
-      let yRatio = (event.clientY - rect.top) / rect.height;
-
-      xRatio = Math.max(0, Math.min(xRatio, 1));
-      yRatio = Math.max(0, Math.min(yRatio, 1));
-
-      const updatedPickers = [...localPickers];
-      updatedPickers[index] = { x: xRatio, y: yRatio };
-
-      const newColor = getColorFromRatio(xRatio, yRatio);
-      const updatedColors = [...colors];
-      updatedColors[index] = newColor;
-
-      setLocalPickers(updatedPickers);
-      dispatch(
-        updateColors({
-          id,
-          image,
-          colors: updatedColors,
-          pickers: updatedPickers,
-        }),
-      );
+      updatePickerPosition(event.clientX, event.clientY, index);
     };
 
     const stop = () => {
+      setDraggingIndex(null);
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", stop);
     };
 
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", stop);
+  };
+
+  const startTouchDrag = (e: ReactTouchEvent, index: number) => {
+    setDraggingIndex(index);
+
+    const move = (event: TouchEvent) => {
+      event.preventDefault();
+      if (event.touches.length > 0) {
+        const touch = event.touches[0];
+        updatePickerPosition(touch.clientX, touch.clientY, index);
+      }
+    };
+
+    const stop = () => {
+      setDraggingIndex(null);
+      document.removeEventListener("touchmove", move);
+      document.removeEventListener("touchend", stop);
+      document.removeEventListener("touchcancel", stop);
+    };
+
+    document.addEventListener("touchmove", move, { passive: false });
+    document.addEventListener("touchend", stop);
+    document.addEventListener("touchcancel", stop);
   };
 
   return (
@@ -211,16 +257,32 @@ export default function ImageCanvas({ id, image, colors, pickers }: Props) {
       {localPickers.map((picker, index) => (
         <div
           key={index}
-          onMouseDown={(e) => startDrag(e, index)}
-          className="absolute w-6 h-6 rounded-full border-2 border-white shadow-lg cursor-move z-10 touch-none"
+          className="absolute z-10"
           style={{
             left: `${picker.x * 100}%`,
             top: `${picker.y * 100}%`,
-            backgroundColor: colors[index],
             transform: "translate(-50%, -50%)",
-            pointerEvents: "auto",
           }}
-        />
+        >
+          {/* Picker circle */}
+          <div
+            onMouseDown={(e) => startDrag(e, index)}
+            onTouchStart={(e) => startTouchDrag(e, index)}
+            className="w-8 h-8 rounded-full border-2 border-white shadow-lg cursor-move"
+            style={{
+              backgroundColor: colors[index],
+              pointerEvents: "auto",
+              touchAction: "none",
+            }}
+          />
+
+          {/* Hex label - tampil saat dragging */}
+          {draggingIndex === index && (
+            <div className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-black/80 text-white text-xs font-mono rounded whitespace-nowrap shadow-lg">
+              {colors[index].toUpperCase()}
+            </div>
+          )}
+        </div>
       ))}
     </div>
   );

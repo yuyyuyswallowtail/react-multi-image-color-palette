@@ -3,7 +3,6 @@ import { ColorItem } from "./ColorItem";
 import { useDispatch } from "react-redux";
 import { deletePalette } from "@/features/palette/paletteSlice";
 import { Button } from "@/components/ui/button";
-import { ShuffleButton } from "./sufflePalette";
 
 export interface ImagePalette {
   id: string;
@@ -32,7 +31,6 @@ export default function PaletteCard({ item }: Props) {
       {/* PALETTE SIDEBAR */}
       <div className="space-y-4 pt-8">
         <div className="flex gap-3">
-          <ShuffleButton item={item} />
           <Button
             variant="destructive"
             onClick={() => dispatch(deletePalette(item.id))}
